@@ -1,0 +1,22 @@
+Bump sign
+Bumps
+Car
+Give way
+Intersection_Alert
+Large_Vehicle
+Manhole
+Motorcycles only
+Pedestrian
+Pothole
+SL_110
+SL_30
+SL_50
+SL_60
+SL_70
+SL_80
+SL_90
+Stop
+Two_Wheeler
+green-traffic-lights
+red-traffic-lights
+yellow-traffic-lights
