@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['With Helmet', 'Without Helmet']
+
+roboflow:
+  workspace: aras-3fi0r
+  project: helmet-detection-qdykh-kn4li
+  version: 3
+  license: Public Domain
+  url: https://universe.roboflow.com/aras-3fi0r/helmet-detection-qdykh-kn4li/dataset/3
