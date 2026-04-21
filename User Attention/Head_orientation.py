@@ -4,6 +4,8 @@ import mediapipe as mp
 import numpy as np
 import time
 import os
+import threading
+import winsound
 
 # Add pylibs to path for torch/ultralytics (Windows long path workaround)
 sys.path.insert(0, r'C:\pylibs')
@@ -15,6 +17,27 @@ FaceLandmarksConnections = mp.tasks.vision.FaceLandmarksConnections
 VisionRunningMode = mp.tasks.vision.RunningMode
 
 model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'face_landmarker.task')
+
+# Initialize audio alert paths for different alert types
+HELMET_ALERT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Helmet1.wav')
+DISTRACTION_ALERT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Distraction.wav')
+
+HELMET_ALERT_AVAILABLE = os.path.exists(HELMET_ALERT_PATH)
+DISTRACTION_ALERT_AVAILABLE = os.path.exists(DISTRACTION_ALERT_PATH)
+
+if HELMET_ALERT_AVAILABLE:
+    print(f"Helmet alert sound found at: {HELMET_ALERT_PATH}")
+else:
+    print(f"Warning: Helmet alert sound not found at {HELMET_ALERT_PATH}")
+
+if DISTRACTION_ALERT_AVAILABLE:
+    print(f"Distraction alert sound found at: {DISTRACTION_ALERT_PATH}")
+else:
+    print(f"Warning: Distraction alert sound not found at {DISTRACTION_ALERT_PATH}")
+
+last_helmet_alert_time = 0
+last_distraction_alert_time = 0
+ALERT_COOLDOWN = 2.0  # Prevent alert spam - play at most every 2 seconds
 
 options = FaceLandmarkerOptions(
     base_options=BaseOptions(model_asset_path=model_path),
@@ -63,6 +86,45 @@ app_state = 'waiting_for_helmet'
 # Cached helmet bounding box for flicker-free drawing
 # Format: (x1, y1, x2, y2, conf) or None
 cached_helmet_bbox = None
+
+def play_alert_sound(alert_type='distraction'):
+    """Play alert sound with cooldown to prevent spam. Repeats every 2 seconds while condition is ongoing."""
+    global last_helmet_alert_time, last_distraction_alert_time
+    
+    current_time = time.time()
+    
+    should_play = False
+    alert_path = None
+    
+    if alert_type == 'helmet':
+        if not HELMET_ALERT_AVAILABLE:
+            return
+        # Play if enough time has passed since last alert (cooldown-based)
+        if current_time - last_helmet_alert_time >= ALERT_COOLDOWN:
+            last_helmet_alert_time = current_time
+            should_play = True
+            alert_path = HELMET_ALERT_PATH
+    elif alert_type == 'distraction':
+        if not DISTRACTION_ALERT_AVAILABLE:
+            return
+        # Play if enough time has passed since last alert (cooldown-based)
+        if current_time - last_distraction_alert_time >= ALERT_COOLDOWN:
+            last_distraction_alert_time = current_time
+            should_play = True
+            alert_path = DISTRACTION_ALERT_PATH
+    
+    if should_play and alert_path:
+        # Play sound in background thread (non-blocking)
+        def play_audio():
+            try:
+                print(f"[ALERT {alert_type.upper()}] Playing sound: {alert_path}")
+                # Use winsound for native WAV playback (asynchronous, non-blocking)
+                winsound.PlaySound(alert_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                
+            except Exception as e:
+                print(f"[ALERT] Error: {e}")
+        
+        threading.Thread(target=play_audio, daemon=True).start()
 
 def check_helmet(image, helmet_model, helmet_mode):
     """Run helmet detection on the current frame. Returns (wearing_helmet: bool, status_text: str, bbox or None)."""
@@ -139,6 +201,7 @@ while cap.isOpened():
                 print("Helmet detected! Starting face pose estimation.")
             else:
                 # Show prominent "Please wear your helmet" message
+                play_alert_sound('helmet')
                 overlay = image.copy()
                 cv2.rectangle(overlay, (0, 0), (img_w, img_h), (0, 0, 200), -1)
                 cv2.addWeighted(overlay, 0.4, image, 0.6, 0, image)
@@ -175,6 +238,7 @@ while cap.isOpened():
 
     if not helmet_still_on:
         # Helmet removed — go back to waiting state
+        play_alert_sound('helmet')
         app_state = 'waiting_for_helmet'
         print("Helmet removed! Pausing face pose estimation.")
         continue
@@ -265,6 +329,8 @@ while cap.isOpened():
                 elapsed = time.time() - distraction_start_time
                 if elapsed >= DISTRACTION_TIME_THRESHOLD:
                     is_distracted = True
+                    # Play alert every 2 seconds while distracted
+                    play_alert_sound('distraction')
             else:
                 distraction_start_time = None
                 is_distracted = False
@@ -290,8 +356,11 @@ while cap.isOpened():
                 overlay = image.copy()
                 cv2.rectangle(overlay, (0, 0), (img_w, img_h), (0, 0, 255), -1)
                 cv2.addWeighted(overlay, 0.3, image, 0.7, 0, image)
-                cv2.putText(image, "!! DISTRACTED - LOOK AHEAD !!", (20, img_h // 2),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
+                distraction_text = "!! DISTRACTED - LOOK AHEAD !!"
+                distraction_text_size = cv2.getTextSize(distraction_text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
+                distraction_x = (img_w - distraction_text_size[0]) // 2
+                cv2.putText(image, distraction_text, (distraction_x, img_h // 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
             elif distraction_start_time is not None:
                 # Show countdown progress bar
                 elapsed = time.time() - distraction_start_time
@@ -308,7 +377,9 @@ while cap.isOpened():
         fps = 1 / totalTime
         #print("FPS: ", fps)
 
-        cv2.putText(image, f'FPS: {int(fps)}', (20,450), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,255,0), 2)
+        fps_text = f'FPS: {int(fps)}'
+        text_size = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 2)[0]
+        cv2.putText(image, fps_text, (img_w - text_size[0] - 10, img_h - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,255,0), 2)
 
         # Draw face landmarks
         for face_lms in results.face_landmarks:
@@ -328,3 +399,4 @@ while cap.isOpened():
 
 landmarker.close()
 cap.release()
+cv2.destroyAllWindows()
